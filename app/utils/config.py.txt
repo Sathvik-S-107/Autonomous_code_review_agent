@@ -1,0 +1,26 @@
+from pydantic import BaseSettings, AnyUrl
+from typing import Optional
+
+
+class Settings(BaseSettings):
+    app_host: str = "0.0.0.0"
+    app_port: int = 8000
+    debug: bool = True
+
+    celery_broker_url: str = "redis://redis:6379/0"
+    celery_result_backend: str = "redis://redis:6379/1"
+
+    github_token: Optional[str] = None
+
+    llm_provider: str = "ollama"  # or 'openai'
+    openai_api_key: Optional[str] = None
+    ollama_url: Optional[AnyUrl] = None
+
+    secret_key: str = "changeme"
+
+    class Config:
+        env_file = ".env"
+        case_sensitive = False
+
+
+settings = Settings()

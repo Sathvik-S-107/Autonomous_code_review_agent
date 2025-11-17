@@ -1,0 +1,16 @@
+from fastapi import FastAPI
+from app.api import endpoints, health
+from app.utils.logging_config import logger
+from app.utils.config import settings
+
+app = FastAPI(
+    title="Autonomous Code Review Agent",
+    version="1.0.0"
+)
+
+app.include_router(endpoints.router, prefix="/api")
+app.include_router(health.router, prefix="/api")
+
+@app.on_event("startup")
+async def startup_event():
+    logger.info("startup", host=settings.app_host, port=settings.app_port)

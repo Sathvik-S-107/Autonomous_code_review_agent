@@ -1,0 +1,42 @@
+from fastapi import APIRouter
+from app.models.schemas import AnalyzePRRequest, TaskStatusResponse, TaskResultsResponse
+from app.tasks.celery_tasks import analyze_pr_task, celery_app
+from app.utils.logging_config import logger
+
+router = APIRouter()
+
+@router.post("/analyze-pr", status_code=202)
+def analyze_pr(payload: AnalyzePRRequest):
+    task = analyze_pr_task.apply_async(
+        args=[str(payload.repo_url), payload.pr_number, payload.github_token]
+    )
+    logger.info("task_submitted", task_id=task.id)
+    return {"task_id": task.id, "status": "pending"}
+
+
+@router.get("/status/{task_id}", response_model=TaskStatusResponse)
+def get_status(task_id: str):
+    async_result = celery_app.AsyncResult(task_id)
+    return {"task_id": task_id, "status": async_result.state}
+
+
+@router.get("/results/{task_id}", response_model=TaskResultsResponse)
+def get_results(task_id: str):
+    async_result = celery_app.AsyncResult(task_id)
+    state = async_result.state
+
+    if state == "FAILURE":
+        return {
+            "task_id": task_id,
+            "status": state,
+            "error": str(async_result.info)
+        }
+
+    if state != "SUCCESS":
+        return {"task_id": task_id, "status": state}
+
+    return {
+        "task_id": task_id,
+        "status": state,
+        "results": async_result.get()
+    }

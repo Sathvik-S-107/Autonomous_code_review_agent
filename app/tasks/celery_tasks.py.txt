@@ -1,0 +1,91 @@
+from celery import Celery, states
+from celery.result import AsyncResult
+from app.utils.config import settings
+from app.agents.code_review_agent import CodeReviewAgent
+from app.utils.logging_config import logger
+import requests
+import re
+
+
+celery_app = Celery(
+    "autocode",
+    broker=settings.celery_broker_url,
+    backend=settings.celery_result_backend,
+)
+
+
+@celery_app.task(bind=True)
+def analyze_pr_task(self, repo_url: str, pr_number: int, github_token: str = None):
+    logger.info("task_start", task_id=self.request.id, repo=repo_url, pr=pr_number)
+
+    try:
+        # extract owner/repo
+        match = re.search(r"github\.com/([^/]+/[^/]+)", repo_url)
+        if not match:
+            msg = "Invalid repository URL"
+            self.update_state(state=states.FAILURE, meta={"exc": msg})
+            return {"error": msg}
+
+        repo = match.group(1)
+
+        headers = {}
+        if github_token:
+            headers["Authorization"] = f"token {github_token}"
+        elif settings.github_token:
+            headers["Authorization"] = f"token {settings.github_token}"
+
+        # FETCH PR FILES
+        files = []
+        page = 1
+        while True:
+            api_url = (
+                f"https://api.github.com/repos/{repo}/pulls/{pr_number}/files?"
+                f"page={page}&per_page=100"
+            )
+            response = requests.get(api_url, headers=headers, timeout=30)
+
+            if response.status_code != 200:
+                break
+
+            data = response.json()
+            if not data:
+                break
+
+            for item in data:
+                filename = item.get("filename")
+                patch = item.get("patch")
+                raw_url = item.get("raw_url")
+
+                if patch:
+                    content = patch
+                else:
+                    # fallback get raw file
+                    raw_resp = requests.get(raw_url, headers=headers, timeout=30)
+                    content = raw_resp.text
+
+                files.append({"name": filename, "content": content})
+
+            if len(data) < 100:
+                break
+            page += 1
+
+        if not files:
+            return {
+                "files": [],
+                "summary": {
+                    "total_files": 0,
+                    "total_issues": 0,
+                    "critical_issues": 0
+                }
+            }
+
+        # Run AI agent
+        agent = CodeReviewAgent()
+        analysis = agent.analyze_files(files)
+
+        logger.info("task_completed", task_id=self.request.id)
+        return analysis
+
+    except Exception as e:
+        logger.error("task_failed", task_id=self.request.id, error=str(e))
+        raise
